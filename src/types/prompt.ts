@@ -39,12 +39,12 @@ export interface PromptVersion {
   branch?: boolean
 }
 
-export type KnowledgeCategory = '全部' | '生成风格' | '镜头语言' | '动态虚化' | '其他'
+export type KnowledgeCategory = string
 
 export interface KnowledgeTerm {
   id: string
   name: string
-  category: Exclude<KnowledgeCategory, '全部'>
+  category: string
   description: string
 }
 
@@ -106,4 +106,75 @@ export interface WorkspaceState {
   folders: FolderRecord[]
   prompts: PromptRecord[]
   trash: TrashEntry[]
+}
+
+export interface LangfuseSettingsInput {
+  host: string
+  publicKey: string
+  secretKey: string
+}
+
+export interface PublicLangfuseSettings {
+  host: string
+  publicKey: string
+  hasSecret: boolean
+}
+
+export interface LangfuseConnectionStatus {
+  ok: boolean
+  message: string
+  host: string
+}
+
+export interface RemotePromptSummary {
+  name: string
+  versions: number[]
+  labels: string[]
+  tags: string[]
+  lastUpdatedAt?: string | null
+  lastConfig?: unknown
+}
+
+export interface RemotePrompt {
+  name: string
+  version: number
+  promptType?: string | null
+  body: string
+  config?: unknown
+  labels: string[]
+  tags: string[]
+  updatedAt?: string | null
+}
+
+export interface RemoteDataset {
+  id: string
+  name: string
+  description?: string | null
+  itemsCount?: number | null
+  updatedAt?: string | null
+}
+
+export interface RemoteDatasetItem {
+  id: string
+  status?: string | null
+  input?: unknown
+  expectedOutput?: unknown
+  metadata?: unknown
+  sourceTraceId?: string | null
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface LangfuseCache {
+  fetchedAt?: string | null
+  prompts: RemotePromptSummary[]
+  datasets: RemoteDataset[]
+  datasetItems: Record<string, RemoteDatasetItem[]>
+}
+
+export interface RecordLangfuseEventInput {
+  eventType: string
+  promptId: string
+  promptTitle?: string
+  metadata?: Record<string, unknown>
 }

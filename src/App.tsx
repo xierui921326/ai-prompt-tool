@@ -4,15 +4,20 @@ import {
   Check,
   ChevronRight,
   CircleDot,
+  CloudOff,
   Database,
+  Download,
   FileText,
   Folder,
   GitCommit,
   Home,
   Import,
   LayoutTemplate,
+  Loader2,
   MessageSquareText,
+  Plug,
   Plus,
+  RefreshCw,
   Search,
   Send,
   Settings,
@@ -22,13 +27,27 @@ import {
   Variable,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactElement } from 'react'
 import {
   assistantMessages,
   generationSteps,
-  knowledgeCategories,
-  knowledgeTerms,
+  knowledgeCategories as fallbackKnowledgeCategories,
+  knowledgeTerms as fallbackKnowledgeTerms,
 } from './data/promptCraftData'
+import {
+  clearLangfuseSettings,
+  fetchLangfuseDatasetItems,
+  fetchLangfusePrompt,
+  isLangfuseRuntimeAvailable,
+  knowledgeTermFromDatasetItem,
+  listLangfuseDatasets,
+  listLangfusePrompts,
+  loadLangfuseCache,
+  loadLangfuseSettings,
+  recordLangfuseEvent,
+  saveLangfuseSettings,
+  testLangfuseConnection,
+} from './services/langfuse'
 import {
   checkoutPromptVersion,
   commitPromptVersion,
@@ -48,11 +67,16 @@ import type {
   AssistantMessage,
   FolderRecord,
   GenerationStep,
-  KnowledgeCategory,
   KnowledgeTerm,
+  LangfuseConnectionStatus,
+  LangfuseSettingsInput,
   PromptRecord,
   PromptVariable,
   PromptVersionRecord,
+  PublicLangfuseSettings,
+  RemoteDataset,
+  RemoteDatasetItem,
+  RemotePromptSummary,
   TrashEntry,
   WorkspaceState,
 } from './types/prompt'
@@ -117,7 +141,7 @@ function App(): ReactElement {
   const [activeNav, setActiveNav] = useState<NavigationId>('prompts')
   const [activeFolder, setActiveFolder] = useState('all')
   const [activeTab, setActiveTab] = useState<TabName>('编辑器')
-  const [activeKnowledgeCategory, setActiveKnowledgeCategory] = useState<KnowledgeCategory>('全部')
+  const [activeKnowledgeCategory, setActiveKnowledgeCategory] = useState<string>('全部')
   const [knowledgeQuery, setKnowledgeQuery] = useState('')
   const [messages, setMessages] = useState<AssistantMessage[]>(assistantMessages)
   const [assistantInput, setAssistantInput] = useState('')
@@ -126,6 +150,21 @@ function App(): ReactElement {
   const [searchText, setSearchText] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+
+  const [langfuseSettings, setLangfuseSettings] = useState<PublicLangfuseSettings | null>(null)
+  const [langfusePrompts, setLangfusePrompts] = useState<RemotePromptSummary[]>([])
+  const [langfuseDatasets, setLangfuseDatasets] = useState<RemoteDataset[]>([])
+  const [langfuseDatasetItems, setLangfuseDatasetItems] = useState<Record<string, RemoteDatasetItem[]>>({})
+  const [activeDatasetName, setActiveDatasetName] = useState<string | null>(null)
+  const [langfuseModalOpen, setLangfuseModalOpen] = useState(false)
+  const [langfuseSyncing, setLangfuseSyncing] = useState(false)
+  const [langfuseError, setLangfuseError] = useState<string | null>(null)
+  const [langfuseLastSyncedAt, setLangfuseLastSyncedAt] = useState<string | null>(null)
+  const [importingPromptName, setImportingPromptName] = useState<string | null>(null)
+  const [datasetLoadingName, setDatasetLoadingName] = useState<string | null>(null)
+
+  const tauriRuntimeAvailable = useMemo(() => isLangfuseRuntimeAvailable(), [])
+  const langfuseConfigured = langfuseSettings?.hasSecret === true
 
   useEffect(() => {
     loadWorkspace()
@@ -143,6 +182,32 @@ function App(): ReactElement {
       })
       .finally(() => setIsLoading(false))
   }, [])
+
+  useEffect(() => {
+    if (!tauriRuntimeAvailable) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const [settings, cache] = await Promise.all([loadLangfuseSettings(), loadLangfuseCache()])
+        if (cancelled) return
+        setLangfuseSettings(settings ?? null)
+        if (cache.prompts.length > 0) setLangfusePrompts(cache.prompts)
+        if (cache.datasets.length > 0) {
+          setLangfuseDatasets(cache.datasets)
+          setActiveDatasetName((current) => current ?? cache.datasets[0]?.name ?? null)
+        }
+        if (Object.keys(cache.datasetItems).length > 0) setLangfuseDatasetItems(cache.datasetItems)
+        if (cache.fetchedAt) setLangfuseLastSyncedAt(cache.fetchedAt)
+      } catch (error: unknown) {
+        if (cancelled) return
+        const message = error instanceof Error ? error.message : String(error)
+        setLangfuseError(message)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [tauriRuntimeAvailable])
 
   const activePrompt: PromptRecord | undefined = useMemo(() => {
     if (workspace.activePromptId == null) return undefined
@@ -174,15 +239,46 @@ function App(): ReactElement {
     })
   }, [workspace.prompts, activeFolder, searchText])
 
+  const datasetItemsForActive: RemoteDatasetItem[] = useMemo(() => {
+    if (activeDatasetName == null) return []
+    return langfuseDatasetItems[activeDatasetName] ?? []
+  }, [activeDatasetName, langfuseDatasetItems])
+
+  const remoteKnowledgeTerms: KnowledgeTerm[] = useMemo(() => {
+    if (activeDatasetName == null) return []
+    return datasetItemsForActive.map((item) => knowledgeTermFromDatasetItem(activeDatasetName, item))
+  }, [activeDatasetName, datasetItemsForActive])
+
+  const knowledgeMode: 'remote' | 'local' =
+    langfuseConfigured && remoteKnowledgeTerms.length > 0 ? 'remote' : 'local'
+
+  const activeKnowledgeTerms: KnowledgeTerm[] =
+    knowledgeMode === 'remote' ? remoteKnowledgeTerms : fallbackKnowledgeTerms
+
+  const knowledgeCategoryOptions: string[] = useMemo(() => {
+    if (knowledgeMode === 'remote') {
+      const unique = new Set<string>(['全部'])
+      for (const term of remoteKnowledgeTerms) unique.add(term.category)
+      return Array.from(unique)
+    }
+    return Array.from(fallbackKnowledgeCategories)
+  }, [knowledgeMode, remoteKnowledgeTerms])
+
+  useEffect(() => {
+    if (!knowledgeCategoryOptions.includes(activeKnowledgeCategory)) {
+      setActiveKnowledgeCategory('全部')
+    }
+  }, [knowledgeCategoryOptions, activeKnowledgeCategory])
+
   const filteredTerms = useMemo(() => {
     const query = knowledgeQuery.trim().toLowerCase()
-    return knowledgeTerms.filter((term) => {
+    return activeKnowledgeTerms.filter((term) => {
       const matchesCategory = activeKnowledgeCategory === '全部' || term.category === activeKnowledgeCategory
       const matchesQuery =
         query.length === 0 || term.name.toLowerCase().includes(query) || term.description.toLowerCase().includes(query)
       return matchesCategory && matchesQuery
     })
-  }, [activeKnowledgeCategory, knowledgeQuery])
+  }, [activeKnowledgeCategory, activeKnowledgeTerms, knowledgeQuery])
 
   const currentFolder = workspace.folders.find((folder) => folder.id === activeFolder) ?? workspace.folders[0]
   const currentFolderName = currentFolder?.name ?? activeFolder
@@ -296,6 +392,11 @@ function App(): ReactElement {
       })
       setWorkspace(next)
       setNotice('Prompt 已保存到本地工作区。')
+      void recordLangfuseEvent({
+        eventType: 'prompt.save',
+        promptId: activePrompt.id,
+        promptTitle: activePrompt.title,
+      })
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
       setNotice(`保存失败：${message}`)
@@ -322,6 +423,11 @@ function App(): ReactElement {
       setWorkspace(next)
       setActiveTab('编辑器')
       setNotice('已新建 Prompt 草稿，可在编辑器中继续完善。')
+      void recordLangfuseEvent({
+        eventType: 'prompt.create',
+        promptId: id,
+        promptTitle: '未命名 Prompt',
+      })
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
       setNotice(`新建 Prompt 失败：${message}`)
@@ -430,6 +536,12 @@ function App(): ReactElement {
       })
       setWorkspace(next)
       setNotice(`版本 ${trimmedId} 已提交。`)
+      void recordLangfuseEvent({
+        eventType: 'prompt.version.commit',
+        promptId: activePrompt.id,
+        promptTitle: activePrompt.title,
+        metadata: { versionId: trimmedId, versionTitle: trimmedTitle },
+      })
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
       setNotice(`提交版本失败：${message}`)
@@ -503,6 +615,174 @@ function App(): ReactElement {
     [activeFolder],
   )
 
+  const handleOpenLangfuseModal = useCallback(() => {
+    setLangfuseError(null)
+    setLangfuseModalOpen(true)
+  }, [])
+
+  const handleCloseLangfuseModal = useCallback(() => {
+    setLangfuseModalOpen(false)
+  }, [])
+
+  const refreshLangfuseSources = useCallback(async () => {
+    if (!tauriRuntimeAvailable) return
+    setLangfuseSyncing(true)
+    setLangfuseError(null)
+    try {
+      const [prompts, datasets] = await Promise.all([
+        listLangfusePrompts(100).catch(() => [] as RemotePromptSummary[]),
+        listLangfuseDatasets().catch(() => [] as RemoteDataset[]),
+      ])
+      setLangfusePrompts(prompts)
+      setLangfuseDatasets(datasets)
+      if (datasets.length > 0) {
+        setActiveDatasetName((current) => current ?? datasets[0].name)
+      }
+      const items: RemoteDatasetItem[] =
+        datasets.length > 0
+          ? await fetchLangfuseDatasetItems(datasets[0].name, 100).catch(() => [] as RemoteDatasetItem[])
+          : []
+      if (datasets.length > 0) {
+        setLangfuseDatasetItems((current) => ({ ...current, [datasets[0].name]: items }))
+      }
+      setLangfuseLastSyncedAt(new Date().toISOString())
+      setNotice('已从 Langfuse 拉取最新 Prompt 模板与数据集。')
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      setLangfuseError(message)
+      setNotice(`Langfuse 同步失败：${message}`)
+    } finally {
+      setLangfuseSyncing(false)
+    }
+  }, [tauriRuntimeAvailable])
+
+  const handleSaveLangfuseSettings = useCallback(
+    async (input: LangfuseSettingsInput): Promise<void> => {
+      setLangfuseError(null)
+      try {
+        const saved = await saveLangfuseSettings(input)
+        setLangfuseSettings(saved)
+        setLangfuseModalOpen(false)
+        setNotice('已保存 Langfuse 凭据，正在同步远端数据...')
+        await refreshLangfuseSources()
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        setLangfuseError(message)
+        throw error
+      }
+    },
+    [refreshLangfuseSources],
+  )
+
+  const handleClearLangfuseSettings = useCallback(async (): Promise<void> => {
+    try {
+      await clearLangfuseSettings()
+      setLangfuseSettings(null)
+      setLangfusePrompts([])
+      setLangfuseDatasets([])
+      setLangfuseDatasetItems({})
+      setActiveDatasetName(null)
+      setLangfuseLastSyncedAt(null)
+      setLangfuseError(null)
+      setNotice('已清除 Langfuse 凭据与缓存。')
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      setLangfuseError(message)
+    }
+  }, [])
+
+  const handleTestLangfuseConnection = useCallback(async (): Promise<LangfuseConnectionStatus> => {
+    setLangfuseError(null)
+    const status = await testLangfuseConnection()
+    if (!status.ok) setLangfuseError(status.message)
+    return status
+  }, [])
+
+  const handleSelectDataset = useCallback(
+    async (name: string) => {
+      setActiveDatasetName(name)
+      if (langfuseDatasetItems[name] != null) return
+      if (!tauriRuntimeAvailable || !langfuseConfigured) return
+      setDatasetLoadingName(name)
+      try {
+        const items = await fetchLangfuseDatasetItems(name, 100)
+        setLangfuseDatasetItems((current) => ({ ...current, [name]: items }))
+        setLangfuseLastSyncedAt(new Date().toISOString())
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        setLangfuseError(message)
+        setNotice(`数据集「${name}」加载失败：${message}`)
+      } finally {
+        setDatasetLoadingName(null)
+      }
+    },
+    [langfuseConfigured, langfuseDatasetItems, tauriRuntimeAvailable],
+  )
+
+  const handleRefreshDatasetItems = useCallback(
+    async (name: string) => {
+      if (!tauriRuntimeAvailable || !langfuseConfigured) return
+      setDatasetLoadingName(name)
+      try {
+        const items = await fetchLangfuseDatasetItems(name, 100)
+        setLangfuseDatasetItems((current) => ({ ...current, [name]: items }))
+        setLangfuseLastSyncedAt(new Date().toISOString())
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        setLangfuseError(message)
+        setNotice(`数据集「${name}」刷新失败：${message}`)
+      } finally {
+        setDatasetLoadingName(null)
+      }
+    },
+    [langfuseConfigured, tauriRuntimeAvailable],
+  )
+
+  const handleImportLangfusePrompt = useCallback(
+    async (summary: RemotePromptSummary, versionOverride?: number) => {
+      if (!tauriRuntimeAvailable || !langfuseConfigured) {
+        setNotice('请先配置 Langfuse 凭据再导入远端 Prompt。')
+        return
+      }
+      setImportingPromptName(summary.name)
+      try {
+        const version = versionOverride ?? (summary.versions[0] != null ? Math.max(...summary.versions) : undefined)
+        const remote = await fetchLangfusePrompt({ name: summary.name, version })
+        const folderForNewPrompt =
+          activeFolder !== 'all' ? activeFolder : pickFallbackFolderId(workspace.folders)
+        const id = generatePromptId(`langfuse-${summary.name}`)
+        const versionId = `v${remote.version}.0`
+        const next = await createPromptRequest({
+          id,
+          title: `${remote.name} · v${remote.version}`,
+          folderId: folderForNewPrompt,
+          category: 'Langfuse 模板',
+          content: remote.body,
+          variables: [],
+          versionId,
+          createdAt: nowISO(),
+        })
+        setWorkspace(next)
+        setActiveNav('prompts')
+        setActiveTab('编辑器')
+        setNotice(`已从 Langfuse 导入 Prompt：${remote.name} v${remote.version}`)
+        void recordLangfuseEvent({
+          eventType: 'prompt.import',
+          promptId: id,
+          promptTitle: remote.name,
+          metadata: { source: 'langfuse', version: remote.version },
+        })
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        setLangfuseError(message)
+        setNotice(`导入失败：${message}`)
+      } finally {
+        setImportingPromptName(null)
+      }
+    },
+    [activeFolder, langfuseConfigured, tauriRuntimeAvailable, workspace.folders],
+  )
+
   const handleGeneratePlan = useCallback(() => {
     setPlanSteps((items) => items.map((item) => ({ ...item, done: true })))
     setMessages((items) => [
@@ -533,6 +813,7 @@ function App(): ReactElement {
   }, [assistantInput])
 
   const isTrashView = activeNav === 'trash'
+  const isTemplatesView = activeNav === 'templates'
 
   return (
     <main className="app-shell">
@@ -644,6 +925,15 @@ function App(): ReactElement {
               <button className="icon-button" onClick={handleShare} type="button" aria-label="分享 Prompt">
                 <Share2 size={16} />
               </button>
+              <button
+                aria-label="Langfuse 设置"
+                className={langfuseConfigured ? 'icon-button connected' : 'icon-button'}
+                onClick={handleOpenLangfuseModal}
+                title={langfuseConfigured ? `已连接 Langfuse：${langfuseSettings?.host ?? ''}` : '配置 Langfuse 凭据'}
+                type="button"
+              >
+                {langfuseConfigured ? <Plug size={16} /> : <CloudOff size={16} />}
+              </button>
               <div className="avatar" aria-label="当前用户" />
             </div>
           </header>
@@ -653,6 +943,19 @@ function App(): ReactElement {
               entries={workspace.trash}
               onRestore={(entry) => void handleRestorePrompt(entry.prompt.id)}
               onPurge={(entry) => void handlePurgePrompt(entry)}
+            />
+          ) : isTemplatesView ? (
+            <TemplateCenterView
+              tauriRuntimeAvailable={tauriRuntimeAvailable}
+              configured={langfuseConfigured}
+              prompts={langfusePrompts}
+              syncing={langfuseSyncing}
+              lastSyncedAt={langfuseLastSyncedAt}
+              importingName={importingPromptName}
+              error={langfuseError}
+              onRefresh={() => void refreshLangfuseSources()}
+              onConfigure={handleOpenLangfuseModal}
+              onImport={(summary, version) => void handleImportLangfusePrompt(summary, version)}
             />
           ) : (
             <PromptArea
@@ -689,15 +992,37 @@ function App(): ReactElement {
           />
           <KnowledgePanel
             activeCategory={activeKnowledgeCategory}
+            categoryOptions={knowledgeCategoryOptions}
             query={knowledgeQuery}
             terms={filteredTerms}
+            mode={knowledgeMode}
+            datasets={langfuseDatasets}
+            activeDataset={activeDatasetName}
+            datasetLoading={datasetLoadingName}
+            configured={langfuseConfigured}
+            tauriRuntimeAvailable={tauriRuntimeAvailable}
             onCategory={setActiveKnowledgeCategory}
             onInsert={handleKnowledgeInsert}
             onQuery={setKnowledgeQuery}
+            onSelectDataset={(name) => void handleSelectDataset(name)}
+            onRefreshDataset={(name) => void handleRefreshDatasetItems(name)}
+            onConfigure={handleOpenLangfuseModal}
           />
           <PlanPanel steps={planSteps} onGenerate={handleGeneratePlan} />
         </aside>
       </section>
+      {langfuseModalOpen && (
+        <LangfuseSettingsModal
+          tauriRuntimeAvailable={tauriRuntimeAvailable}
+          settings={langfuseSettings}
+          error={langfuseError}
+          syncing={langfuseSyncing}
+          onClose={handleCloseLangfuseModal}
+          onSave={handleSaveLangfuseSettings}
+          onClear={() => void handleClearLangfuseSettings()}
+          onTest={handleTestLangfuseConnection}
+        />
+      )}
     </main>
   )
 }
@@ -1194,31 +1519,97 @@ function VersionTabPanel({
 
 function KnowledgePanel({
   activeCategory,
+  categoryOptions,
   query,
   terms,
+  mode,
+  datasets,
+  activeDataset,
+  datasetLoading,
+  configured,
+  tauriRuntimeAvailable,
   onCategory,
   onInsert,
   onQuery,
+  onSelectDataset,
+  onRefreshDataset,
+  onConfigure,
 }: {
-  activeCategory: KnowledgeCategory
+  activeCategory: string
+  categoryOptions: string[]
   query: string
   terms: KnowledgeTerm[]
-  onCategory: (category: KnowledgeCategory) => void
+  mode: 'remote' | 'local'
+  datasets: RemoteDataset[]
+  activeDataset: string | null
+  datasetLoading: string | null
+  configured: boolean
+  tauriRuntimeAvailable: boolean
+  onCategory: (category: string) => void
   onInsert: (term: KnowledgeTerm) => void
   onQuery: (value: string) => void
+  onSelectDataset: (name: string) => void
+  onRefreshDataset: (name: string) => void
+  onConfigure: () => void
 }): ReactElement {
+  const showLangfuseBanner = mode === 'local' && (!configured || datasets.length === 0)
   return (
     <section className="panel-card knowledge-card" aria-label="知识库">
       <div className="section-title-row">
         <h3>知识库</h3>
-        <Settings size={16} />
+        <button
+          aria-label="Langfuse 设置"
+          className="heading-action"
+          onClick={onConfigure}
+          type="button"
+        >
+          <Settings size={16} />
+        </button>
       </div>
+      {showLangfuseBanner && (
+        <div className="knowledge-banner" role="note">
+          {tauriRuntimeAvailable
+            ? configured
+              ? '尚未拉取到 Langfuse 数据集，当前展示本地示例术语。'
+              : '尚未配置 Langfuse 凭据，当前展示本地示例术语。'
+            : '浏览器预览模式下无法连接 Langfuse，当前展示本地示例术语。'}
+          {tauriRuntimeAvailable && (
+            <button className="link-button" onClick={onConfigure} type="button">
+              立即配置
+            </button>
+          )}
+        </div>
+      )}
       <label className="knowledge-search">
         <Search size={15} />
         <input onChange={(event) => onQuery(event.target.value)} placeholder="搜索名词..." value={query} />
       </label>
+      {mode === 'remote' && datasets.length > 0 && (
+        <div className="dataset-row">
+          <select
+            aria-label="Langfuse 数据集"
+            onChange={(event) => onSelectDataset(event.target.value)}
+            value={activeDataset ?? ''}
+          >
+            {datasets.map((dataset) => (
+              <option key={dataset.id ?? dataset.name} value={dataset.name}>
+                {dataset.name}
+              </option>
+            ))}
+          </select>
+          <button
+            aria-label="刷新数据集"
+            className="icon-button compact"
+            disabled={activeDataset == null || datasetLoading === activeDataset}
+            onClick={() => activeDataset && onRefreshDataset(activeDataset)}
+            type="button"
+          >
+            {datasetLoading === activeDataset ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+          </button>
+        </div>
+      )}
       <div className="category-row">
-        {knowledgeCategories.map((category) => (
+        {categoryOptions.map((category) => (
           <button
             className={category === activeCategory ? 'active' : ''}
             key={category}
@@ -1245,6 +1636,271 @@ function KnowledgePanel({
         )}
       </div>
     </section>
+  )
+}
+
+function TemplateCenterView({
+  tauriRuntimeAvailable,
+  configured,
+  prompts,
+  syncing,
+  lastSyncedAt,
+  importingName,
+  error,
+  onRefresh,
+  onConfigure,
+  onImport,
+}: {
+  tauriRuntimeAvailable: boolean
+  configured: boolean
+  prompts: RemotePromptSummary[]
+  syncing: boolean
+  lastSyncedAt: string | null
+  importingName: string | null
+  error: string | null
+  onRefresh: () => void
+  onConfigure: () => void
+  onImport: (summary: RemotePromptSummary, version?: number) => void
+}): ReactElement {
+  return (
+    <article className="template-center" aria-label="Langfuse 模板中心">
+      <header className="template-header">
+        <div>
+          <h2>模板中心 · Langfuse</h2>
+          <p>
+            {tauriRuntimeAvailable
+              ? configured
+                ? '展示远端 Langfuse Prompt 模板，可一键导入到本地工作区。'
+                : '请先在右上角齿轮中配置 Langfuse 凭据后再使用模板中心。'
+              : '浏览器预览模式下无法连接 Langfuse，请在桌面端运行 PromptCraft。'}
+          </p>
+        </div>
+        <div className="template-actions">
+          <span className="template-sync-time">
+            {lastSyncedAt ? `上次同步：${formatDateCN(lastSyncedAt)}` : '尚未同步'}
+          </span>
+          <button className="secondary-button" onClick={onConfigure} type="button">
+            <Settings size={16} />
+            Langfuse 设置
+          </button>
+          <button
+            className="primary-button"
+            disabled={!tauriRuntimeAvailable || !configured || syncing}
+            onClick={onRefresh}
+            type="button"
+          >
+            {syncing ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
+            {syncing ? '同步中' : '同步远端'}
+          </button>
+        </div>
+      </header>
+      {error != null && <div className="template-error">{error}</div>}
+      {prompts.length === 0 ? (
+        <div className="empty-state">
+          <LayoutTemplate size={28} />
+          <p>
+            {configured && tauriRuntimeAvailable
+              ? '远端暂未发现 Prompt 模板，点击右上角「同步远端」拉取。'
+              : '配置 Langfuse 凭据后，点击「同步远端」拉取 Prompt 模板。'}
+          </p>
+        </div>
+      ) : (
+        <ul className="template-list">
+          {prompts.map((summary) => {
+            const latestVersion = summary.versions.length > 0 ? Math.max(...summary.versions) : null
+            const isImporting = importingName === summary.name
+            return (
+              <li className="template-item" key={summary.name}>
+                <div className="template-meta">
+                  <h3>{summary.name}</h3>
+                  <div className="template-tags">
+                    {latestVersion != null && <span className="badge">v{latestVersion}</span>}
+                    {summary.labels.map((label) => (
+                      <span className="badge label" key={`l-${label}`}>{label}</span>
+                    ))}
+                    {summary.tags.map((tag) => (
+                      <span className="badge tag" key={`t-${tag}`}>#{tag}</span>
+                    ))}
+                  </div>
+                  {summary.lastUpdatedAt && (
+                    <p className="template-updated">最后更新：{formatDateCN(summary.lastUpdatedAt)}</p>
+                  )}
+                </div>
+                <div className="template-row-actions">
+                  <button
+                    className="primary-button"
+                    disabled={!configured || isImporting}
+                    onClick={() => onImport(summary)}
+                    type="button"
+                  >
+                    {isImporting ? <Loader2 size={14} className="spin" /> : <Download size={14} />}
+                    {isImporting ? '导入中' : '导入到工作区'}
+                  </button>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </article>
+  )
+}
+
+function LangfuseSettingsModal({
+  tauriRuntimeAvailable,
+  settings,
+  error,
+  syncing,
+  onClose,
+  onSave,
+  onClear,
+  onTest,
+}: {
+  tauriRuntimeAvailable: boolean
+  settings: PublicLangfuseSettings | null
+  error: string | null
+  syncing: boolean
+  onClose: () => void
+  onSave: (input: LangfuseSettingsInput) => Promise<void>
+  onClear: () => void
+  onTest: () => Promise<LangfuseConnectionStatus>
+}): ReactElement {
+  const [host, setHost] = useState(settings?.host ?? 'https://cloud.langfuse.com')
+  const [publicKey, setPublicKey] = useState(settings?.publicKey ?? '')
+  const [secretKey, setSecretKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<LangfuseConnectionStatus | null>(null)
+  const [localError, setLocalError] = useState<string | null>(null)
+
+  const submit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      if (!tauriRuntimeAvailable) {
+        setLocalError('浏览器预览模式下无法保存凭据，请在桌面端运行。')
+        return
+      }
+      if (publicKey.trim().length === 0 || secretKey.trim().length === 0) {
+        setLocalError('请填写 Public Key 与 Secret Key。')
+        return
+      }
+      setSaving(true)
+      setLocalError(null)
+      try {
+        await onSave({ host: host.trim(), publicKey: publicKey.trim(), secretKey: secretKey.trim() })
+        setSecretKey('')
+      } catch (cause: unknown) {
+        const message = cause instanceof Error ? cause.message : String(cause)
+        setLocalError(message)
+      } finally {
+        setSaving(false)
+      }
+    },
+    [host, onSave, publicKey, secretKey, tauriRuntimeAvailable],
+  )
+
+  const handleTest = useCallback(async () => {
+    setTesting(true)
+    setLocalError(null)
+    try {
+      const status = await onTest()
+      setTestResult(status)
+    } catch (cause: unknown) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      setLocalError(message)
+    } finally {
+      setTesting(false)
+    }
+  }, [onTest])
+
+  const disabled = !tauriRuntimeAvailable
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Langfuse 设置">
+      <div className="modal-card langfuse-modal">
+        <header className="modal-header">
+          <div>
+            <h2>Langfuse 设置</h2>
+            <p>配置 Langfuse host 与 API 凭据。Secret Key 仅本地存储，不会回传前端。</p>
+          </div>
+          <button aria-label="关闭" className="icon-button" onClick={onClose} type="button">
+            <X size={16} />
+          </button>
+        </header>
+        {!tauriRuntimeAvailable && (
+          <div className="modal-warning">
+            浏览器预览模式无法保存 Langfuse 凭据，请在桌面端运行 PromptCraft。
+          </div>
+        )}
+        <form className="modal-form" onSubmit={(event) => void submit(event)}>
+          <label>
+            <span>Host</span>
+            <input
+              disabled={disabled}
+              onChange={(event) => setHost(event.target.value)}
+              placeholder="https://cloud.langfuse.com"
+              type="url"
+              value={host}
+            />
+          </label>
+          <label>
+            <span>Public Key</span>
+            <input
+              disabled={disabled}
+              onChange={(event) => setPublicKey(event.target.value)}
+              placeholder="pk-lf-..."
+              type="text"
+              value={publicKey}
+            />
+          </label>
+          <label>
+            <span>Secret Key {settings?.hasSecret && <small>· 已保存，留空则保持不变</small>}</span>
+            <input
+              autoComplete="off"
+              disabled={disabled}
+              onChange={(event) => setSecretKey(event.target.value)}
+              placeholder={settings?.hasSecret ? '••••••••' : 'sk-lf-...'}
+              type="password"
+              value={secretKey}
+            />
+          </label>
+          {(localError ?? error) != null && <div className="modal-error">{localError ?? error}</div>}
+          {testResult != null && (
+            <div className={testResult.ok ? 'modal-success' : 'modal-error'}>
+              {testResult.ok ? `连接成功（${testResult.host}）` : `连接失败：${testResult.message}`}
+            </div>
+          )}
+          <footer className="modal-footer">
+            <button
+              className="ghost-button"
+              disabled={disabled || !settings?.hasSecret}
+              onClick={() => {
+                onClear()
+              }}
+              type="button"
+            >
+              <Trash2 size={14} />
+              清除凭据
+            </button>
+            <div className="modal-footer-actions">
+              <button
+                className="secondary-button"
+                disabled={disabled || testing || !settings?.hasSecret}
+                onClick={() => void handleTest()}
+                type="button"
+              >
+                {testing ? <Loader2 size={14} className="spin" /> : <Plug size={14} />}
+                测试连接
+              </button>
+              <button className="primary-button" disabled={disabled || saving || syncing} type="submit">
+                {saving || syncing ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
+                {saving || syncing ? '保存中' : '保存'}
+              </button>
+            </div>
+          </footer>
+        </form>
+      </div>
+    </div>
   )
 }
 
