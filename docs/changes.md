@@ -57,6 +57,19 @@
    - 浏览器预览环境自动降级到 `localStorage`，便于单独调试前端。
    - 顶部操作区新增“保存”入口，应用启动时自动恢复已保存草稿。
 
+11. 第三批·续：Tauri 工作区与多 Prompt CRUD：
+   - 把后端持久化从单个草稿升级为完整工作区，数据落到 `promptcraft-workspace.json`，写入采用临时文件 + 原子 rename。
+   - 工作区结构包含 `schemaVersion / activePromptId / folders / prompts / trash`，每个 Prompt 内嵌 `variables[]` 与 `versions[]` 快照。
+   - 启动时若旧 `prompt-drafts.json` 存在会自动迁移到新工作区。
+   - 新增 Tauri 命令：`load_workspace / save_workspace / create_prompt / update_prompt / delete_prompt / restore_prompt / purge_prompt / commit_prompt_version / checkout_prompt_version / create_folder / rename_folder / delete_folder / set_active_prompt`，旧的 `load_prompt_draft / save_prompt_draft` 改为基于当前激活 Prompt 的兼容入口。
+   - 前端用新的 `src/services/workspaceStorage.ts` 替换原有 `promptStorage.ts`，浏览器环境保持 `localStorage` 回退，保留与后端一致的数据结构。
+   - `App.tsx` 改造为多 Prompt 工作台：
+     - 左侧增加 Prompt 列表，按当前文件夹筛选，可切换、删除（移入回收站）。
+     - 文件夹可新建 / 删除（系统文件夹「全部 Prompt」受保护），删除后归属 Prompt 会自动迁移到回退文件夹。
+     - 顶部「新建 Prompt」「保存」走新的后端命令，标题支持重命名。
+     - 主导航「回收站」入口渲染回收站视图，可恢复或永久删除。
+     - 「历史版本」标签页与右侧时间线均支持「提交当前为新版本」与「切回历史版本」，分别对应 `commit_prompt_version` / `checkout_prompt_version`。
+
 ### 当前常用命令
 
 ```bash

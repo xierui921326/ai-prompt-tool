@@ -242,7 +242,7 @@ button:disabled {
 }
 
 .nav-item,
-.folder-item {
+.folder-trigger {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -257,30 +257,192 @@ button:disabled {
   transition: background-color 150ms ease, color 150ms ease;
 }
 
+.nav-item {
+  position: relative;
+}
+
 .nav-item:hover,
+.nav-item.active {
+  color: var(--text);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.nav-item.active svg {
+  color: var(--primary);
+}
+
+.nav-item b {
+  margin-left: auto;
+  padding: 1px 6px;
+  color: var(--text);
+  background: rgba(239, 68, 68, 0.32);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 31px;
+  padding-right: 4px;
+  border-radius: 8px;
+  transition: background-color 150ms ease;
+}
+
 .folder-item:hover,
-.nav-item.active,
 .folder-item.active {
   color: var(--text);
   background: rgba(148, 163, 184, 0.12);
 }
 
-.nav-item.active svg,
-.folder-item.active svg {
+.folder-item.active .folder-trigger,
+.folder-item .folder-trigger:hover {
+  color: var(--text);
+}
+
+.folder-item.active .folder-trigger svg {
   color: var(--primary);
 }
 
 .nav-item span,
-.folder-item span {
+.folder-trigger span {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.folder-item b {
+.folder-trigger b {
   margin-left: auto;
   color: var(--text-soft);
   font-size: 11px;
+}
+
+.folder-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--text-soft);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 150ms ease, color 150ms ease, background-color 150ms ease;
+}
+
+.folder-item:hover .folder-delete {
+  opacity: 1;
+}
+
+.folder-delete:hover {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.18);
+}
+
+.prompts-section {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.prompts-section .section-title-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.prompt-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.prompt-list .empty-state {
+  min-height: 0;
+  padding: 16px 8px;
+}
+
+.prompt-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 0;
+  border-radius: 8px;
+  transition: background-color 150ms ease;
+}
+
+.prompt-item:hover,
+.prompt-item.active {
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.prompt-trigger {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  color: var(--text-soft);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.prompt-item:hover .prompt-trigger,
+.prompt-item.active .prompt-trigger {
+  color: var(--text);
+}
+
+.prompt-trigger span {
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.prompt-trigger small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.prompt-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-soft);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 150ms ease, color 150ms ease, background-color 150ms ease;
+}
+
+.prompt-item:hover .prompt-delete,
+.prompt-item.active .prompt-delete {
+  opacity: 1;
+}
+
+.prompt-delete:hover {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.18);
 }
 
 .section-title-row {
@@ -907,6 +1069,93 @@ kbd {
   color: var(--success);
 }
 
+.heading-action {
+  margin-left: 8px;
+  padding: 2px 9px;
+  color: var(--text-soft);
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.heading-action:hover {
+  color: var(--text);
+}
+
+.version-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+}
+
+.version-tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.version-tab-header p {
+  margin: 0;
+  flex: 1 1 auto;
+}
+
+.version-tab-panel .timeline {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.trash-area {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.trash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.trash-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(15, 23, 42, 0.62);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.trash-item h3 {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.trash-item p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.trash-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.version-card .section-title-row button {
+  gap: 4px;
+}
+
 @media (max-width: 1420px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -938,8 +1187,13 @@ kbd {
   }
 
   .nav-item,
-  .folder-item {
+  .folder-item,
+  .folder-trigger {
     height: 28px;
+  }
+
+  .prompt-trigger {
+    height: 26px;
   }
 
   .usage-card svg {
