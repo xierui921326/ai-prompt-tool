@@ -70,6 +70,27 @@
      - 主导航「回收站」入口渲染回收站视图，可恢复或永久删除。
      - 「历史版本」标签页与右侧时间线均支持「提交当前为新版本」与「切回历史版本」，分别对应 `commit_prompt_version` / `checkout_prompt_version`。
 
+12. 第四批：Langfuse 知识库与 Prompt 模板同步：
+   - Tauri 后端新增 `src-tauri/src/langfuse.rs` 模块，使用 `reqwest`（rustls-tls）调用 Langfuse Public API。
+   - 凭据（host / publicKey / secretKey）以独立 JSON 文件 `langfuse-config.json` 存放于应用数据目录，Unix 平台写入后立即 `chmod 0600`；secretKey 仅后端持有，前端只能拿到「是否已配置」标记。
+   - 远端同步结果缓存到 `langfuse-cache.json`（prompts / datasets / dataset items / fetchedAt），桌面端冷启动可先用缓存渲染，再后台刷新。
+   - 新增 10 个 Tauri 命令：
+     - `load_langfuse_settings` / `save_langfuse_settings` / `clear_langfuse_settings`
+     - `test_langfuse_connection`
+     - `list_langfuse_prompts` / `fetch_langfuse_prompt`（GET `/api/public/v2/prompts`）
+     - `list_langfuse_datasets` / `fetch_langfuse_dataset_items`（GET `/api/public/datasets[/{name}/items]`）
+     - `record_langfuse_event`（POST `/api/public/ingestion`，best-effort 上报创建 / 保存 / 提交版本 / 导入事件）
+     - `load_langfuse_cache`（启动时读本地缓存）
+   - 前端 `src/services/langfuse.ts` 重写为基于 `invoke` 的客户端，浏览器环境下所有读类命令返回空数据、写类命令显式抛错并保留本地 mock。
+   - `App.tsx` 改造：
+     - 顶部操作区新增 Langfuse 图标按钮：未配置显示 `CloudOff`，已配置显示 `Plug`，点击打开「Langfuse 设置」弹层。
+     - 弹层支持填写 host / Public Key / Secret Key、「测试连接」、「清除凭据」，保存后自动同步远端 prompts/datasets。
+     - 主导航「模板中心」新增独立视图，列出远端 Prompt 模板（含 version / labels / tags / 更新时间），支持「同步远端」与「导入到工作区」（按最新版本创建本地 Prompt）。
+     - 右侧「知识库」面板自动判断 Langfuse 数据源：已配置且有数据时使用远端 dataset items，并支持数据集切换 / 刷新；未配置时显示横幅引导并降级到本地 mock 术语。
+     - 在「保存 / 新建 / 提交版本 / 导入模板」时调用 `record_langfuse_event`，失败静默，不阻塞主流程。
+   - 类型：`src/types/prompt.ts` 扩展 `LangfuseSettingsInput / PublicLangfuseSettings / LangfuseConnectionStatus / RemotePromptSummary / RemotePrompt / RemoteDataset / RemoteDatasetItem / LangfuseCache / RecordLangfuseEventInput`，并把 `KnowledgeCategory` 放宽为 `string` 以接纳来自远端数据集的任意分类名。
+   - 依赖：`src-tauri/Cargo.toml` 增加 `reqwest 0.12 (rustls-tls)`、`tokio (rt-multi-thread)`、`base64`、`thiserror`、`chrono`、`uuid v4`。
+
 ### 当前常用命令
 
 ```bash

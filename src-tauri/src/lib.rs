@@ -1,3 +1,5 @@
+mod langfuse;
+
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -839,6 +841,9 @@ pub fn run() {
             let store_path = workspace_store_path(&app.handle())?;
             migrate_legacy_draft(&app.handle(), &store_path)?;
             app.manage(WorkspaceStore::new(store_path));
+            let langfuse_store = langfuse::init(&app.handle())
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            app.manage(langfuse_store);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -856,7 +861,17 @@ pub fn run() {
             delete_folder,
             set_active_prompt,
             load_prompt_draft,
-            save_prompt_draft
+            save_prompt_draft,
+            langfuse::load_langfuse_settings,
+            langfuse::save_langfuse_settings,
+            langfuse::clear_langfuse_settings,
+            langfuse::test_langfuse_connection,
+            langfuse::list_langfuse_prompts,
+            langfuse::fetch_langfuse_prompt,
+            langfuse::list_langfuse_datasets,
+            langfuse::fetch_langfuse_dataset_items,
+            langfuse::record_langfuse_event,
+            langfuse::load_langfuse_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running PromptCraft application");
