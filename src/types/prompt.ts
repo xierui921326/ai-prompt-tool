@@ -65,3 +65,45 @@ export interface UsagePoint {
   id: string
   value: number
 }
+
+export interface PromptVersionRecord {
+  id: string
+  title: string
+  date: string
+  parentId?: string | null
+  branch?: boolean
+  content: string
+  variables: PromptVariable[]
+}
+
+export interface PromptRecord {
+  id: string
+  title: string
+  folderId: string
+  category: string
+  content: string
+  variables: PromptVariable[]
+  activeVersionId: string
+  versions: PromptVersionRecord[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface FolderRecord {
+  id: string
+  name: string
+  system: boolean
+}
+
+export interface TrashEntry {
+  prompt: PromptRecord
+  deletedAt: string
+}
+
+export interface WorkspaceState {
+  schemaVersion: number
+  activePromptId: string | null
+  folders: FolderRecord[]
+  prompts: PromptRecord[]
+  trash: TrashEntry[]
+}
