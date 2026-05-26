@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Manager};
 
+const MAX_DRAFT_CONTENT_BYTES: usize = 512 * 1024;
+const MAX_FIELD_LEN: usize = 256;
+const MAX_VARIABLES: usize = 100;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptVariableDraft {
@@ -59,6 +63,26 @@ fn save_prompt_draft(app: AppHandle, draft: PromptDraft) -> Result<PromptDraft, 
 
     if draft.content.trim().is_empty() {
         return Err("Prompt 内容不能为空".to_string());
+    }
+
+    if draft.id.len() > MAX_FIELD_LEN {
+        return Err("Prompt ID 超出长度限制".to_string());
+    }
+
+    if draft.title.len() > MAX_FIELD_LEN {
+        return Err("Prompt 标题超出长度限制".to_string());
+    }
+
+    if draft.content.len() > MAX_DRAFT_CONTENT_BYTES {
+        return Err("Prompt 内容超出大小限制".to_string());
+    }
+
+    if draft.variables.len() > MAX_VARIABLES {
+        return Err("变量数量超出限制".to_string());
+    }
+
+    if !draft.id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Err("Prompt ID 包含非法字符".to_string());
     }
 
     let store_path = prompt_store_path(&app)?;
